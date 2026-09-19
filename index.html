@@ -1,1 +1,287 @@
+# =====================================================================
+# SECTION 1: CONFIGURATION, IMPORTS & APP SETUP
+# (یہاں تمام لائبریریاں، فلاس ایپ اور ڈیٹا بیس کی کنفیگریشن ہے)
+# =====================================================================
+import sqlite3
+from datetime import datetime
+from flask import Flask, render_template_string, request, jsonify
 
+app = Flask(__name__)
+
+def init_db():
+    conn = sqlite3.connect('brandup_digital_tracker.db')
+    cursor = conn.cursor()
+    # ڈیٹا بیس ٹیبل جو تمام کیوریز اور یوزر سیشنز کو محفوظ کرے گا
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS search_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            search_date TEXT,
+            region TEXT,
+            niche TEXT,
+            user_session_id TEXT,
+            master_query TEXT,
+            refined_query TEXT,
+            search_time TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+
+# =====================================================================
+# SECTION 2: BACKEND API & ROUTING LOGIC
+# (یہاں تمام روٹس اور فلٹرز کے مطابق ڈیٹا نکالنے کا بیک اینڈ لاجک ہے)
+# =====================================================================
+@app.route('/')
+def home():
+    return render_template_string(SINGLE_FILE_TEMPLATE)
+
+@app.route('/api/get-master-queries', methods=['POST'])
+def get_master_queries():
+    data = request.json
+    date = data.get('date')
+    region = data.get('region')
+    niche = data.get('niche')
+    
+    conn = sqlite3.connect('brandup_digital_tracker.db')
+    cursor = conn.cursor()
+    
+    # سٹیپ 2: ماسٹر کیوریز اور ان کے کل کاؤنٹ نکالنا
+    cursor.execute('''
+        SELECT master_query, COUNT(*) as total_count 
+        FROM search_logs 
+        WHERE search_date = ? AND region = ? AND niche = ?
+        GROUP BY master_query
+        ORDER BY total_count DESC
+    ''', (date, region, niche))
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    results = [{"query": row[0], "count": row[1]} for row in rows]
+    return jsonify(results)
+
+@app.route('/api/get-user-journey', methods=['POST'])
+def get_user_journey():
+    data = request.json
+    query = data.get('query')
+    
+    conn = sqlite3.connect('brandup_digital_tracker.db')
+    cursor = conn.cursor()
+    
+    # سٹیپ 3 اور 4: اس کیوری کو سرچ کرنے والے یوزرز اور ان کی تبدیل شدہ کیوریز کا سفر
+    cursor.execute('''
+        SELECT user_session_id, refined_query, search_time 
+        FROM search_logs 
+        WHERE master_query = ?
+        ORDER BY user_session_id, search_time ASC
+    ''', (query,))
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    journeys = []
+    for row in rows:
+        journeys.append({
+            "session_id": row[0],
+            "refined_query": row[1],
+            "time": row[2]
+        })
+        
+    return jsonify(journeys)
+
+
+# =====================================================================
+# SECTION 3: FRONTEND UI, STYLING & JAVASCRIPT (SINGLE TEMPLATE)
+# (یہاں ڈیش بورڈ کے چاروں مراحل، ایچ ٹی ایم ایل، سی ایس ایس اور جے ایس موجود ہیں)
+# =====================================================================
+SINGLE_FILE_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="ur" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>Brandup Digital - Query Journey Tracker</title>
+    <style>
+        /* --- CSS STYLING SECTION --- */
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #fff; margin: 0; padding: 0; }
+        header { background: #1e293b; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; }
+        .logo { font-weight: bold; font-size: 1.2rem; color: #38bdf8; }
+        nav a { color: #94a3b8; text-decoration: none; margin-left: 20px; }
+        
+        .container { max-width: 900px; margin: 40px auto; background: #1e293b; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
+        .screen { display: none; }
+        .screen.active { display: block; }
+        
+        h2 { margin-bottom: 20px; color: #f8fafc; border-bottom: 2px solid #334155; padding-bottom: 10px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: 600; color: #cbd5e1; }
+        input, select { width: 100%; padding: 12px; border-radius: 6px; border: 1px solid #475569; background: #0f172a; color: #fff; font-size: 1rem; }
+        
+        .btn-green { background: #22c55e; color: white; border: none; padding: 12px 25px; font-size: 1.1rem; border-radius: 6px; cursor: pointer; font-weight: bold; width: 100%; transition: background 0.3s; }
+        .btn-green:hover { background: #16a34a; }
+        
+        .list-item { background: #334155; padding: 15px; margin-bottom: 10px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s; }
+        .list-item:hover { background: #475569; }
+        .badge { background: #0284c7; padding: 5px 12px; border-radius: 20px; font-weight: bold; font-size: 0.9rem; }
+        
+        .back-btn { background: #64748b; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; margin-bottom: 15px; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo">Brandup Digital</div>
+        <nav>
+            <a href="#">Home</a>
+            <a href="#">About</a>
+            <a href="#">More</a>
+        </nav>
+    </header>
+
+    <div class="container">
+    
+        <!-- SCREEN 1: FILTERS & GET HISTORY BUTTON -->
+        <div id="screen1" class="screen active">
+            <h2>تاریخ، ریجن اور نش منتخب کریں</h2>
+            <div class="form-group">
+                <label>تاریخ (Select Date):</label>
+                <input type="date" id="inputDate">
+            </div>
+            <div class="form-group">
+                <label>ریجن (Choose Region):</label>
+                <select id="inputRegion">
+                    <option value="europe">Europe</option>
+                    <option value="uk">UK</option>
+                    <option value="usa">USA</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>نش (Choose Niche):</label>
+                <select id="inputNiche">
+                    <option value="trading">Trading & Finance</option>
+                    <option value="crypto">Crypto Regulations</option>
+                </select>
+            </div>
+            <button class="btn-green" onclick="goToScreen2()">Get History</button>
+        </div>
+
+        <!-- SCREEN 2: MASTER QUERIES & VOLUME LIST -->
+        <div id="screen2" class="screen">
+            <button class="back-btn" onclick="switchScreen('screen1')">← واپس جائیں</button>
+            <h2>ماسٹر کیوریز اور سرچ والیم</h2>
+            <div id="masterQueriesList">
+                <!-- جاوا سکرپٹ کے ذریعے کیوریز یہاں لوڈ ہوں گی -->
+            </div>
+        </div>
+
+        <!-- SCREEN 3 & 4: USER SESSIONS & QUERY REFINEMENT JOURNEY -->
+        <div id="screen3" class="screen">
+            <button class="back-btn" onclick="switchScreen('screen2')">← واپس جائیں</button>
+            <h2 id="selectedQueryTitle">یوزر کا سرچ سفر (Query Journey)</h2>
+            <div id="userJourneyList">
+                <!-- منتخب کردہ کیوری کے یوزرز کا سفر یہاں شو ہوگا -->
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        /* --- JAVASCRIPT FUNCTIONALITY SECTION --- */
+        function switchScreen(screenId) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(screenId).classList.add('active');
+        }
+
+        function goToScreen2() {
+            const date = document.getElementById('inputDate').value;
+            const region = document.getElementById('inputRegion').value;
+            const niche = document.getElementById('inputNiche').value;
+
+            if(!date) {
+                alert("براہ کرم تاریخ منتخب کریں!");
+                return;
+            }
+
+            // بیک اینڈ سے ڈیٹا منگوانا
+            fetch('/api/get-master-queries', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ date, region, niche })
+            })
+            .then(res => res.json())
+            .then(data => {
+                const listContainer = document.getElementById('masterQueriesList');
+                listContainer.innerHTML = '';
+                
+                if(data.length === 0) {
+                    listContainer.innerHTML = '<p>اس تاریخ اور نش کا کوئی ڈیٹا موجود نہیں ہے۔ (ڈیمو کے لیے خودکار ڈیٹا لوڈ کیا جا رہا ہے)</p>';
+                    // ڈیمو کے لیے فرضی ڈیٹا دکھانا اگر ڈیٹا بیس خالی ہو
+                    data = [
+                        { query: "mica regulation eu", count: 10000 },
+                        { query: "gold price overnight trade", count: 5000 },
+                        { query: "xauusd spread broker europe", count: 2500 }
+                    ];
+                }
+
+                data.forEach(item => {
+                    const div = document.createElement('div');
+                    div.className = 'list-item';
+                    div.innerHTML = `<span>${item.query}</span> <span class="badge">${item.count} سرچز</span>`;
+                    div.onclick = () => loadUserJourney(item.query);
+                    listContainer.appendChild(div);
+                });
+
+                switchScreen('screen2');
+            });
+        }
+
+        function loadUserJourney(query) {
+            document.getElementById('selectedQueryTitle').innerText = `کیوری کا سفر: "${query}"`;
+            
+            fetch('/api/get-user-journey', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query })
+            })
+            .then(res => res.json())
+            .then(data => {
+                const journeyContainer = document.getElementById('userJourneyList');
+                journeyContainer.innerHTML = '';
+
+                // اگر ڈیٹا بیس میں فرضی ڈیمو دکھانا ہو
+                if(data.length === 0) {
+                    data = [
+                        { session_id: "User_#786", refined_query: "gold price today", time: "10:00 AM" },
+                        { session_id: "User_#786", refined_query: "gold price during middle east conflict", time: "10:05 AM" },
+                        { session_id: "User_#786", refined_query: "how to protect xauusd open position overnight", time: "10:12 AM" }
+                    ];
+                }
+
+                data.forEach(step => {
+                    const stepDiv = document.createElement('div');
+                    stepDiv.className = 'list-item';
+                    stepDiv.style.flexDirection = 'column';
+                    stepDiv.style.alignItems = 'flex-start';
+                    stepDiv.innerHTML = `
+                        <div style="font-size: 0.85rem; color: #38bdf8; margin-bottom: 5px;">سیشن: ${step.session_id} | وقت: ${step.time}</div>
+                        <div style="font-size: 1.1rem; font-weight: bold;">تبدیل شدہ کیوری: ${step.refined_query}</div>
+                    `;
+                    journeyContainer.appendChild(stepDiv);
+                });
+
+                switchScreen('screen3');
+            });
+        }
+    </script>
+</body>
+</html>
+"""
+
+# =====================================================================
+# SECTION 4: APP RUNNER
+# (یہاں سے فائل کو رن کیا جاتا ہے)
+# =====================================================================
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
